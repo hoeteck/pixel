@@ -15,8 +15,8 @@
 ## see time2vec, vec2time
 ## note: D is ell in the paper.
 
-## given time t in {1,2}^{<= D}, 
-## secret keys sk_t = (t, skv_t) 
+## given time t in {1,2}^{<= D},
+## secret keys sk_t = (t, skv_t)
 ## * where t is the current time vector
 ## * skv_t is a list of subkeys tsk_* defined below
 ## * we maintain the invariant len(skv_t) = len(t) + 1
@@ -47,15 +47,20 @@
 ## note: hw(t) h_D^M = hw(t||0^{D-|t|-1}||M)
 ## i.e., delegate tsk_t to t||0^{D-|t|-1}||M and randomize
 
-## verifying a signature sig on M w.r.t time t 
+## verifying a signature sig on M w.r.t time t
 ## * sig[0] = g2^r
 ## * sig[1] = h^x hw(t)^r h_D^{M r}
 ## * pk = g2^x
 ## * check e(sig[1], g2) = e(h, pk) * e(hw(t) h_D^M, sig[0])
 
-curve = 0
+curve = 1
 ## curve = 0: insecure! demonstrates arithmetic "in the exponent"
 ## curve = 1: uses BLS12-381
+
+testvec = 1
+## testvec = 0: none test vectors, normal run
+## testvec = 1: uses deterministic randomness, and print out test vectors
+
 
 from random import randint
 if (curve == 1):
@@ -64,6 +69,13 @@ if (curve == 1):
   from curve_ops import g1gen, g2gen, point_mul, point_neg, point_add, point_eq
   from pairing import multi_pairing
   from util import get_cmdline_options, prepare_msg, print_g1_hex, print_g2_hex, print_tv_sig
+
+if (testvec == 1):
+  from pixel_util import print_g1, print_g2, hr
+  # ctr to generate the random field element r
+  rng_ctr = 0
+  # input to the hash_to_field function
+  msg = bytes("the message to be signed", "ascii")
 
 ### public constants
 D = 4   # depth
@@ -88,10 +100,22 @@ if (curve == 1):
     return point_neg(a)
 
   def G1rand():
-    return G1mul(g1gen,randint(1,q-1))
+    if testvec ==1:
+        global rng_ctr
+        r = hr(msg, rng_ctr)
+        rng_ctr+=1
+    else:
+        r = randint(1,q-1)
+    return G1mul(g1gen,r)
 
   def G2rand():
-    return G2mul(g2gen,randint(1,q-1))
+    if testvec ==1:
+        global rng_ctr
+        r = hr(msg, rng_ctr)
+        rng_ctr += 1
+    else:
+        r = randint(1,q-1)
+    return G2mul(g2gen,r)
 
   def GTtestpp(va,vb):
   ## checks whether <va, vb> == 0
@@ -134,7 +158,7 @@ else:
 def vadd(va, vb):
 ## input: vectors va, vb
 ## return coordinate-wise addition of va, vb
-## in group setting: first entry over G2, remaining entries over G1 
+## in group setting: first entry over G2, remaining entries over G1
   assert (len(va) > 0)
   ans = [ G2add(va[0],vb[0]) ]
   for i in range(1,len(va)):
@@ -143,7 +167,7 @@ def vadd(va, vb):
 
 def vmul(va, b):
 ## multiply each entry of vector va by scalar b
-## in group setting: first entry over G2, remaining entries over G1 
+## in group setting: first entry over G2, remaining entries over G1
   assert (len(va) > 0)
   ans = [ G2mul(va[0],b) ]
   for i in range(1,len(va)):
@@ -214,7 +238,7 @@ def tkey_rand(tsk,w,r=None):
   ## randomizes tsk_w -- doesn't mutate
   ## that is, multiplies tsk_w by
   ## g2^r, (h_0 prod hj^wj)^r, h_{|w|+1}^r, ..., h_D^r
-  ## i.e., r times [g2] + [hw(w)] + hv[len(w)+1:] 
+  ## i.e., r times [g2] + [hw(w)] + hv[len(w)+1:]
   ## TODO: erase r after? in RO, can avoid separately erasing stuff.
   if r is None:
     r = randint(1,q-1)
@@ -300,8 +324,25 @@ def verify(pk, tv, M, sig):
                    [G2neg(g2), pk, sig[0] ] )
 
 def test():
-      x= randint(0,q-1)
+
+      if testvec==1:
+          x = hr(msg, rng_ctr)
+      else:
+          x = randint(0,q-1)
       setup()
+
+      if testvec == 1:
+          print ("x", format(x, '100x'))
+          print ("g1")
+          print_g1(g1)
+          print ("g2")
+          print_g2(g2)
+          print ("h")
+          print_g1(h)
+          for i in range( len(hv)):
+              print ("h vector", i)
+              print_g1(hv[i])
+
       (pk, sk1) = keygen(x)
 
       print("q", q, "depth", D, "msk", x)
@@ -325,7 +366,7 @@ def test():
 
       #sig001 = tkey_delegate(tsk0,[],[0,0,1])
       #print("delegate to 0,0,1", sig001, tkey_rand(sig001,[0,0,1]))
-      
+
       print("== testing randomization")
       print("tsk for []", tkey_rand(tsk0,[]), tkey_rand(tsk0,[]))
       #print("tsk for [1]", tkey_rand(tsk1,[1]),tkey_rand(tsk1,[1]))
