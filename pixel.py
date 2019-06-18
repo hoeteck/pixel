@@ -53,7 +53,7 @@
 ## * pk = g2^x
 ## * check e(sig[1], g2) = e(h, pk) * e(hw(t) h_D^M, sig[0])
 
-curve = 0
+curve = 1
 ## curve = 0: insecure! demonstrates arithmetic "in the exponent"
 ## curve = 1: uses BLS12-381
 
@@ -72,7 +72,7 @@ if (curve == 1):
 
 if (testvec == 1):
   import sys
-  from pixel_util import hash_1, hash_2, print_sk, serial_ssk
+  from pixel_util import hash_1, hash_2, print_sk, print_sig
 
    # the seed to instantiate G_0 and G_1 for parameters
   param_seed = bytes("this is the seed for parameters", "ascii")
@@ -247,18 +247,6 @@ def tkey_rand(tsk,w,r=None):
   if r is None:
     r = randint(1,q-1)
 
-  ## determinstic sigantures: r = hash_to_field(input, 0, 1, sha256, 2)
-  ## input = `rand-sign`| tsk | M | t
-  if testvec==1:
-      global seed
-      r = hash_1(seed)
-      seed = hash_2(seed)
-      orig_stdout = sys.stdout
-      sys.stdout = file
-      print ("randomness in update:", format(r, 'x'))
-      sys.stdout = orig_stdout
-
-
   ha = hw(w)  ## h_0 prod hj^wj
   hvb = hv[len(w)+1:] ## h_{|w|+1}, ..., h_D
   #print r, [g2] + [ha] + hvb, vmul([g2] + [ha] + hvb, r)
@@ -283,7 +271,7 @@ def keygen(x=None):
   ## tsk_empty = randomize(1, h^x, 1, ..., 1)
   # print "hx ", h, x, h*x
   #tsk0 = [0] + [h * x] + D*[0]
-  tsk0 =  tkey_rand([G1mul(h,0)] + [G1mul(h,x)] + D*[G1mul(h,0)], []) ## G2 x G1^{D+1}
+  tsk0 =  tkey_rand([G2mul(h,0)] + [G1mul(h,x)] + D*[G1mul(h,0)], []) ## G2 x G1^{D+1}
   sk = ([], [tsk0])
   return (pk, sk)
 
@@ -302,7 +290,19 @@ def keyupdate(sk):
     ##   sk_12 = (tsk_12, tsk_2, [])
     ##   sk_121 = (tsk_121, tsk_2, [], tsk_122)
       tskv1 = tkey_delegate(skv[0],tv,[1]) ## tv||1
-      tskv2 = tkey_rand(tkey_delegate(skv[0],tv,[2]),tv + [2]) ## tv||2
+
+    ## determinstic sigantures with r from G_0(s)
+      r = None
+      if testvec==1 :
+        # generate r from G_0(seed)
+        global seed
+        r = hash_1(seed)
+        seed = hash_2(seed)
+        orig_stdout = sys.stdout
+        sys.stdout = file
+        print ("randomness in update:", format(r, 'x'))
+        sys.stdout = orig_stdout
+      tskv2 = tkey_rand(tkey_delegate(skv[0],tv,[2]),tv + [2], r) ## tv||2
       skv[0] = tskv1
       skv.append(tskv2)
       tv.append(1) ## tv = tv+[1] doesn't mutate
@@ -336,12 +336,10 @@ def sign(sk, M, r=None):
   ## determinstic sigantures: r = hash_to_field(input, 0, 1, sha256, 2)
   ## input = `rand-sign`| tsk | M | t
   if testvec==1:
-      input = b"rand-sign" + serial_ssk(tskv[0]) + bytes(M) + bytes(tv)
       global seed
       r = hash_1(seed)
       seed = hash_2(seed)
       orig_stdout = sys.stdout
-      print ("input to hash_to_field:", input)
       sys.stdout = file
       print ("randomness in signing:", format(r, 'x'))
       sys.stdout = orig_stdout
@@ -407,7 +405,7 @@ def test():
       #print("delegate to 0,0,1", sig001, tkey_rand(sig001,[0,0,1]))
 
       if testvec == 0:
-          # the following tests requires the random r == none
+          # original outputs
           print("== testing randomization")
           print("tsk for []", tkey_rand(tsk0,[]), tkey_rand(tsk0,[]))
           #print("tsk for [1]", tkey_rand(tsk1,[1]),tkey_rand(tsk1,[1]))
@@ -462,18 +460,36 @@ def test():
             keyupdate(sk1)
 
       if testvec ==1:
-          # the following tests requires the random r == none
+          # deterministic outputs redirected to file
+          global seed
           orig_stdout = sys.stdout
           sys.stdout = file
           print("== printing test vectors for randomization")
           print_sk(sk1)
+
+          # generate randomness from G_0(s)
+          r = hash_1(seed)
+          seed = hash_2(seed)
+          # sign a message m = 3
+          sig = sign(sk1,3, r)
+          time = sk1[0]
+          print("  signature on M=3 ",  verify(pk,time,3,sig))
+          print_sig(sig)
           for i in range (2**D-2):
             print("the %d-th update"%(i+1))
             keyupdate(sk1)
             print_sk(sk1)
+            r = hash_1(seed)
+            seed = hash_2(seed)
+            sig = sign(sk1,3, r)
+            time = sk1[0]
+            print("  signature on M=3 ",  verify(pk,time,3,sig))
+            print_sig(sig)
 
           sys.stdout = orig_stdout
           file.close()
+
+
 
 
 if __name__ == "__main__":
