@@ -57,7 +57,7 @@ curve = 1
 ## curve = 0: insecure! demonstrates arithmetic "in the exponent"
 ## curve = 1: uses BLS12-381
 
-testvec = 0
+testvec = 1
 ## testvec = 0: none test vectors, normal run
 ## testvec = 1: uses deterministic randomness, and print out test vectors
 
@@ -271,7 +271,17 @@ def keygen(x=None):
   ## tsk_empty = randomize(1, h^x, 1, ..., 1)
   # print "hx ", h, x, h*x
   #tsk0 = [0] + [h * x] + D*[0]
-  tsk0 =  tkey_rand([G2mul(h,0)] + [G1mul(h,x)] + D*[G1mul(h,0)], []) ## G2 x G1^{D+1}
+  r = None
+  if testvec==1:
+    global seed
+    orig_stdout = sys.stdout
+    sys.stdout = file
+    r = hash_1(seed)
+    seed = hash_2(seed)
+    sys.stdout = file
+    print ("randomness in keygen:", format(r, 'x'))
+    sys.stdout = orig_stdout
+  tsk0 =  tkey_rand([G2mul(h,0)] + [G1mul(h,x)] + D*[G1mul(h,0)], [], r) ## G2 x G1^{D+1}
   sk = ([], [tsk0])
   return (pk, sk)
 
@@ -333,9 +343,9 @@ def sign(sk, M, r=None):
   wplus = [0] * (D-len(tv)-1) + [M]  # 0^{D-|tv|-1}||M
   siga = tkey_delegate(tskv[0],tv,wplus)
 
-  ## determinstic sigantures: r = hash_to_field(input, 0, 1, sha256, 2)
-  ## input = `rand-sign`| tsk | M | t
+
   if testvec==1:
+      ## generate the randomness for signing from G_0(s)
       global seed
       r = hash_1(seed)
       seed = hash_2(seed)
@@ -460,11 +470,11 @@ def test():
             keyupdate(sk1)
 
       if testvec ==1:
+          print("== printing test vectors for randomization")
           # deterministic outputs redirected to file
           global seed
           orig_stdout = sys.stdout
           sys.stdout = file
-          print("== printing test vectors for randomization")
           print_sk(sk1)
 
           # generate randomness from G_0(s)
