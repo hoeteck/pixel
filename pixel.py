@@ -72,7 +72,7 @@ if (curve == 1):
 
 if (testvec == 1):
   import sys
-  from pixel_util import hash_1, hash_2, print_sk, print_sig
+  from pixel_util import hash_1, hash_2, print_sk, print_tsk, print_sig
 
    # the seed to instantiate G_0 and G_1 for parameters
   param_seed = bytes("this is the seed for parameters", "ascii")
@@ -312,7 +312,9 @@ def keyupdate(sk):
         sys.stdout = file
         print ("randomness in update:", format(r, 'x'))
         sys.stdout = orig_stdout
-      tskv2 = tkey_rand(tkey_delegate(skv[0],tv,[2]),tv + [2], r) ## tv||2
+      tmp =   tkey_delegate(skv[0],tv,[2])
+      print_tsk(tmp)
+      tskv2 = tkey_rand(tmp,tv + [2], r) ## tv||2
       skv[0] = tskv1
       skv.append(tskv2)
       tv.append(1) ## tv = tv+[1] doesn't mutate
@@ -346,9 +348,9 @@ def sign(sk, M, r=None):
 
   if testvec==1:
       ## generate the randomness for signing from G_0(s)
-      global seed
-      r = hash_1(seed)
-      seed = hash_2(seed)
+      # global seed
+      # r = hash_1(seed)
+      # seed = hash_2(seed)
       orig_stdout = sys.stdout
       sys.stdout = file
       print ("randomness in signing:", format(r, 'x'))
@@ -363,14 +365,14 @@ def verify(pk, tv, M, sig):
                    [G2neg(g2), pk, sig[0] ] )
 
 def test():
-
+      setup()
       if testvec==1:
-          global param_seed
-          x = hash_1(param_seed)
-          param_seed = hash_2(param_seed)
+          global seed
+          x = hash_1(seed)
+          seed = hash_2(seed)
       else:
           x = randint(0,q-1)
-      setup()
+
 
       (pk, sk1) = keygen(x)
 
@@ -472,7 +474,6 @@ def test():
       if testvec ==1:
           print("== printing test vectors for randomization")
           # deterministic outputs redirected to file
-          global seed
           orig_stdout = sys.stdout
           sys.stdout = file
           print_sk(sk1)
