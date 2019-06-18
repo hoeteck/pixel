@@ -53,11 +53,11 @@
 ## * pk = g2^x
 ## * check e(sig[1], g2) = e(h, pk) * e(hw(t) h_D^M, sig[0])
 
-curve = 1
+curve = 0
 ## curve = 0: insecure! demonstrates arithmetic "in the exponent"
 ## curve = 1: uses BLS12-381
 
-testvec = 1
+testvec = 0
 ## testvec = 0: none test vectors, normal run
 ## testvec = 1: uses deterministic randomness, and print out test vectors
 
@@ -71,11 +71,15 @@ if (curve == 1):
   from util import get_cmdline_options, prepare_msg, print_g1_hex, print_g2_hex, print_tv_sig
 
 if (testvec == 1):
-  from pixel_util import print_g1, print_g2, hr
-  # ctr to generate the random field element r
-  rng_ctr = 0
-  # input to the hash_to_field function
-  msg = bytes("the message to be signed", "ascii")
+  import sys
+  from pixel_util import hash_1, hash_2, print_sk, serial_ssk
+
+   # the seed to instantiate G_0 and G_1 for parameters
+  param_seed = bytes("this is the seed for parameters", "ascii")
+  # the seed to instantiate G_0 and G_1 for randomness
+  seed = bytes("this is the seed for randomness", "ascii")
+  # output to the file
+  file = open("test_vector.txt", "w")
 
 ### public constants
 D = 4   # depth
@@ -101,18 +105,18 @@ if (curve == 1):
 
   def G1rand():
     if testvec ==1:
-        global rng_ctr
-        r = hr(msg, rng_ctr)
-        rng_ctr+=1
+        global param_seed
+        r = hash_1(param_seed)
+        param_seed = hash_2(param_seed)
     else:
         r = randint(1,q-1)
     return G1mul(g1gen,r)
 
   def G2rand():
     if testvec ==1:
-        global rng_ctr
-        r = hr(msg, rng_ctr)
-        rng_ctr += 1
+        global param_seed
+        r = hash_1(param_seed)
+        param_seed = hash_2(param_seed)
     else:
         r = randint(1,q-1)
     return G2mul(g2gen,r)
@@ -242,6 +246,19 @@ def tkey_rand(tsk,w,r=None):
   ## TODO: erase r after? in RO, can avoid separately erasing stuff.
   if r is None:
     r = randint(1,q-1)
+
+  ## determinstic sigantures: r = hash_to_field(input, 0, 1, sha256, 2)
+  ## input = `rand-sign`| tsk | M | t
+  if testvec==1:
+      global seed
+      r = hash_1(seed)
+      seed = hash_2(seed)
+      orig_stdout = sys.stdout
+      sys.stdout = file
+      print ("randomness in update:", format(r, 'x'))
+      sys.stdout = orig_stdout
+
+
   ha = hw(w)  ## h_0 prod hj^wj
   hvb = hv[len(w)+1:] ## h_{|w|+1}, ..., h_D
   #print r, [g2] + [ha] + hvb, vmul([g2] + [ha] + hvb, r)
@@ -315,6 +332,20 @@ def sign(sk, M, r=None):
   (tv, tskv) = sk
   wplus = [0] * (D-len(tv)-1) + [M]  # 0^{D-|tv|-1}||M
   siga = tkey_delegate(tskv[0],tv,wplus)
+
+  ## determinstic sigantures: r = hash_to_field(input, 0, 1, sha256, 2)
+  ## input = `rand-sign`| tsk | M | t
+  if testvec==1:
+      input = b"rand-sign" + serial_ssk(tskv[0]) + bytes(M) + bytes(tv)
+      global seed
+      r = hash_1(seed)
+      seed = hash_2(seed)
+      orig_stdout = sys.stdout
+      print ("input to hash_to_field:", input)
+      sys.stdout = file
+      print ("randomness in signing:", format(r, 'x'))
+      sys.stdout = orig_stdout
+
   sig = tkey_rand(siga, tmv(tv, M),r)
   return sig
 
@@ -326,28 +357,36 @@ def verify(pk, tv, M, sig):
 def test():
 
       if testvec==1:
-          x = hr(msg, rng_ctr)
+          global param_seed
+          x = hash_1(param_seed)
+          param_seed = hash_2(param_seed)
       else:
           x = randint(0,q-1)
       setup()
 
-      if testvec == 1:
-          print ("x", format(x, '100x'))
-          print ("g1")
-          print_g1(g1)
-          print ("g2")
-          print_g2(g2)
-          print ("h")
-          print_g1(h)
-          for i in range( len(hv)):
-              print ("h vector", i)
-              print_g1(hv[i])
-
       (pk, sk1) = keygen(x)
 
-      print("q", q, "depth", D, "msk", x)
-      print("g2, h, h1,...,hD, ", g2, h, hv)
-      print("pk,sk1", pk, sk1)
+      if testvec == 1:
+          orig_stdout = sys.stdout
+          sys.stdout = file
+          print ("x", format(x, '100x'))
+          print ("g1")
+          print_g1_hex(g1)
+          print ("g2")
+          print_g2_hex(g2)
+          print ("h")
+          print_g1_hex(h)
+          for i in range( len(hv)):
+              print ("h%d" % i)
+              print_g1_hex(hv[i])
+          print ("public key")
+          print_g2_hex(pk)
+          print_sk(sk1)
+          sys.stdout = orig_stdout
+      else:
+          print("q", q, "depth", D, "msk", x)
+          print("g2, h, h1,...,hD, ", g2, h, hv)
+          print("pk,sk1", pk, sk1)
       (vt, tskv) = sk1
       tsk0 = tskv[0]
 
@@ -367,58 +406,74 @@ def test():
       #sig001 = tkey_delegate(tsk0,[],[0,0,1])
       #print("delegate to 0,0,1", sig001, tkey_rand(sig001,[0,0,1]))
 
-      print("== testing randomization")
-      print("tsk for []", tkey_rand(tsk0,[]), tkey_rand(tsk0,[]))
-      #print("tsk for [1]", tkey_rand(tsk1,[1]),tkey_rand(tsk1,[1]))
-      assert tkey_rand(tsk1,[1],0) == tsk1
-      print("tsk for [1,1]", tkey_rand(tsk11,[1,1]),tkey_rand(tsk11,[1,1]))
-      assert not point_eq(tsk0[0],tkey_rand(tsk0,[])[0]), "randomization not adding entropy"
+      if testvec == 0:
+          # the following tests requires the random r == none
+          print("== testing randomization")
+          print("tsk for []", tkey_rand(tsk0,[]), tkey_rand(tsk0,[]))
+          #print("tsk for [1]", tkey_rand(tsk1,[1]),tkey_rand(tsk1,[1]))
+          assert tkey_rand(tsk1,[1],0) == tsk1
+          print("tsk for [1,1]", tkey_rand(tsk11,[1,1]),tkey_rand(tsk11,[1,1]))
+          assert not point_eq(tsk0[0],tkey_rand(tsk0,[])[0]), "randomization not adding entropy"
 
-      print("== testing sign")
+          print("== testing sign")
 
-      ## signing M, time=1, randomness=0  ==  delegate to [0,0,0,M]
-      assert sign(sk1,2,0) == tkey_delegate(tsk0,[],(D-1)*[0]+[2])
-      assert sign(sk1,2,3) == tkey_rand(tkey_delegate(tsk0,[],(D-1)*[0]+[2]),(D-1)*[0]+[2],3)
+          ## signing M, time=1, randomness=0  ==  delegate to [0,0,0,M]
+          assert sign(sk1,2,0) == tkey_delegate(tsk0,[],(D-1)*[0]+[2])
+          assert sign(sk1,2,3) == tkey_rand(tkey_delegate(tsk0,[],(D-1)*[0]+[2]),(D-1)*[0]+[2],3)
 
-      sig1 = sign(sk1,1)
-      sig2 = sign(([1,1],[tsk11]),3)
-      ## t = [], sig looks like: (r, x+h_D * M * r)
-      print("x, w_001, w_113", x, hw([0,0,1]), hw([1,1,3]))
-      print(tkey_delegate(tsk0,[],[0,0,1]))
-      #print("assuming g2=1"
-      # assert (g2 == 1)
-      print("sig on M=1,t=[]", sig1) #, sig1[0], (hw([0,0,1]) * sig1[0] + h*x) % q
-      print("sig on M=3,t=[1,1]", sig2) #, sig2[0], (hw([1,1,3]) * sig2[0] + h*x) % q
+          sig1 = sign(sk1,1)
+          sig2 = sign(([1,1],[tsk11]),3)
+          ## t = [], sig looks like: (r, x+h_D * M * r)
+          print("x, w_001, w_113", x, hw([0,0,1]), hw([1,1,3]))
+          print(tkey_delegate(tsk0,[],[0,0,1]))
+          #print("assuming g2=1"
+          # assert (g2 == 1)
+          print("sig on M=1,t=[]", sig1) #, sig1[0], (hw([0,0,1]) * sig1[0] + h*x) % q
+          print("sig on M=3,t=[1,1]", sig2) #, sig2[0], (hw([1,1,3]) * sig2[0] + h*x) % q
 
-      print("== testing verify")
-      print("verifying tsk0 well-formed via pairing")
-      assert GTtestpp( [hw([]),   tsk0[1],   h],
-                       [tsk0[0],  G2neg(g2), pk] )
-      print("verifying one-step delegation via pairing")
-      assert GTtestpp( [hw([1]),  tkey_delegate(tsk0,[],[1])[1],   h],
-                       [tsk0[0],  G2neg(g2), pk] )
+          print("== testing verify")
+          print("verifying tsk0 well-formed via pairing")
+          assert GTtestpp( [hw([]),   tsk0[1],   h],
+                           [tsk0[0],  G2neg(g2), pk] )
+          print("verifying one-step delegation via pairing")
+          assert GTtestpp( [hw([1]),  tkey_delegate(tsk0,[],[1])[1],   h],
+                           [tsk0[0],  G2neg(g2), pk] )
 
-      assert sign(sk1,1,0) == tkey_delegate(tsk0,[],(D-1)*[0]+[1])
+          assert sign(sk1,1,0) == tkey_delegate(tsk0,[],(D-1)*[0]+[1])
 
-      print("verifying sign M=1, t=[]")
-      assert GTtestpp( [hw((D-1)*[0]+[1]),   sign(sk1,1,0)[1],   h],
-                       [tsk0[0],  G2neg(g2),          pk] )
-      assert verify(pk,[],1,sign(sk1,1,0))
-      #return GTtestpp( [sig[1],    h,  hw(tmv(tv,M))],
-      #                 [G2neg(g2), pk, sig[0] ] )
-      assert verify(pk,[1,1],3,sig2)
-      assert not verify(pk,[1,1],3,[sig2[0],G1rand()]), "random signature should not verify"
+          print("verifying sign M=1, t=[]")
+          assert GTtestpp( [hw((D-1)*[0]+[1]),   sign(sk1,1,0)[1],   h],
+                           [tsk0[0],  G2neg(g2),          pk] )
+          assert verify(pk,[],1,sign(sk1,1,0))
+          #return GTtestpp( [sig[1],    h,  hw(tmv(tv,M))],
+          #                 [G2neg(g2), pk, sig[0] ] )
+          assert verify(pk,[1,1],3,sig2)
+          assert not verify(pk,[1,1],3,[sig2[0],G1rand()]), "random signature should not verify"
 
-      print("== testing update")
+          print("== testing update")
 
-      for i in range(2**D-1):
-        print("sk_", i) #, ": ", sk1
-        print("  time ", sk1[0])
-        print("  key  ", sk1[1])
-        sig = sign(sk1,3) # time [2,2]
-        time = sk1[0]
-        print("  signature on M=3 ", sig, verify(pk,time,3,sig))
-        keyupdate(sk1)
+          for i in range(2**D-1):
+            print("sk_", i) #, ": ", sk1
+            print("  time ", sk1[0])
+            print("  key  ", sk1[1])
+            sig = sign(sk1,3) # time [2,2]
+            time = sk1[0]
+            print("  signature on M=3 ", sig, verify(pk,time,3,sig))
+            keyupdate(sk1)
+
+      if testvec ==1:
+          # the following tests requires the random r == none
+          orig_stdout = sys.stdout
+          sys.stdout = file
+          print("== printing test vectors for randomization")
+          print_sk(sk1)
+          for i in range (2**D-2):
+            print("the %d-th update"%(i+1))
+            keyupdate(sk1)
+            print_sk(sk1)
+
+          sys.stdout = orig_stdout
+          file.close()
 
 
 if __name__ == "__main__":
