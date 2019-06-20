@@ -5,10 +5,12 @@
 # (C) 2019 Hoeteck Wee <hoeteck@alum.mit.edu>
 
 
-## Overview of Pixel -- https://eprint.iacr.org/2019/514
+## Overview of Pixel
+##   basic forward-secure signature in 
+##   Section 3, https://eprint.iacr.org/2019/514
 
 ## public parameters
-## g1, g2, h
+## g2, h
 ## hv: vector of D+1 group elements in G1
 
 ## treat time in {1,2,...,2^D-1} as vectors over {1,2}^{<= D-1}.
@@ -54,16 +56,23 @@
 ## * check e(sig[1], g2) = e(h, pk) * e(hw(t) h_D^M, sig[0])
 
 curve = 0
-## curve = 0: insecure! demonstrates arithmetic "in the exponent"
 ## curve = 1: uses BLS12-381
+## curve = 0: insecure! demonstrates arithmetic "in the exponent".
+##   This is useful for debugging -- runs much faster and does
+##   not have any dependencies on the underlying curve implementations.
 
 from random import randint
+from hashlib import sha256
 if (curve == 1):
   # requires Python 3 for the underlying BLS12-381 arithmetic
   from consts import g1suite, q
   from curve_ops import g1gen, g2gen, point_mul, point_neg, point_add, point_eq
   from pairing import multi_pairing
   from util import get_cmdline_options, prepare_msg, print_g1_hex, print_g2_hex, print_tv_sig
+else:
+  q = 17
+  g1gen = 1
+  g2gen = 1
 
 ### public constants
 D = 4   # depth
@@ -87,19 +96,11 @@ if (curve == 1):
   def G2neg(a):
     return point_neg(a)
 
-  def G1rand():
-    return G1mul(g1gen,randint(1,q-1))
-
-  def G2rand():
-    return G2mul(g2gen,randint(1,q-1))
-
   def GTtestpp(va,vb):
   ## checks whether <va, vb> == 0
     return (multi_pairing(va,vb) == 1)
 
 else:
-  q = 17
-
   def point_eq(a,b):
     return a == b
 
@@ -118,16 +119,26 @@ else:
   def G2neg(a):
     return -a
 
-  def G1rand():
-    return randint(0,q-1)
-
-  def G2rand():
-    return randint(0,q-1)
-
   def GTtestpp(va,vb):
   ## checks whether <va, vb> == 0
     return (vip(va,vb) == 0)
 
+def G1rand():
+#  if r is None:
+#    r = randint(1,q-1)
+  return G1mul(g1gen,randint(1,q-1))
+
+def G2rand():
+  return G2mul(g2gen,randint(1,q-1))
+
+# defined in RFC 3447, section 4.2
+def OS2IP(octets):
+  ret = 0
+  for o in octets:
+    ret = ret << 8
+    ret += o
+  assert ret == int.from_bytes(octets, 'big')
+  return ret
 
 ### helper functions layered on top of curve operations
 
@@ -183,19 +194,13 @@ def vec2time(tv,D):
       return 1 + (ti-1) * (pow(2,D-1)-1) + vec2time(tv,D-1)
 
 ### public parameters
-g1 = G1rand()
-g2 = G2rand()
-h = G1rand()
+g2 = g2gen # using fixed generator for g2
+h = 0
 hv = [0] * (D+1) ## vector of D+1 group elements in G1
 
 def hw(wv):
   ## h_0 prod hj^wj
   ## wv is a vector
-#   ans = hv[0]
-#   for i in range(1,len(wv)+1):
-#     if wv[i-1] != 0:
-#       ans = G1add(ans, G1mul(hv[i],wv[i-1]))
-#   return ans
   return vip(hv[:len(wv)+1], [1]+wv)
 
 ## === formatting issues
@@ -206,8 +211,15 @@ def hw(wv):
 ##   assert len(tsk) == D-len(w)+2
 ## signature on a message doesn't contain time period
 
-def setup():
-  for i in range(0,D+1):
+def setup(mode=None):
+  global h, hv
+  if (mode==0):
+    h = g1gen
+    for i in range(0,D+1):
+      hv[i] = G1mul(g1gen,i+1)
+  else:
+    h = G1rand()
+    for i in range(0,D+1):
       hv[i] = G1rand()
 
 def tkey_rand(tsk,w,r=None):
@@ -220,7 +232,6 @@ def tkey_rand(tsk,w,r=None):
     r = randint(1,q-1)
   ha = hw(w)  ## h_0 prod hj^wj
   hvb = hv[len(w)+1:] ## h_{|w|+1}, ..., h_D
-  #print r, [g2] + [ha] + hvb, vmul([g2] + [ha] + hvb, r)
   return vadd(tsk, vmul([g2] + [ha] + hvb, r))
 
 def tkey_delegate(tsk,w,wplus):
@@ -237,10 +248,8 @@ def keygen(x=None):
   ## if x is not specified, pick a random x
   if x is None:
     x = randint(0,q-1)
-  # print "x ",x
   pk = G2mul(g2,x)   ## g2^x over G2
   ## tsk_empty = randomize(1, h^x, 1, ..., 1)
-  # print "hx ", h, x, h*x
   #tsk0 = [0] + [h * x] + D*[0]
   tsk0 =  tkey_rand([G1mul(h,0)] + [G1mul(h,x)] + D*[G1mul(h,0)], []) ## G2 x G1^{D+1}
   sk = ([], [tsk0])
@@ -288,6 +297,8 @@ def sign(sk, M, r=None):
   ## signs message M in Z_q under the time period associated with sk
   ## switch order of sig1, sig2 in paper
   ## delegate tsk_tv to tv||0^{D-|tv|-1}||M and randomize
+  if isinstance(M,bytes):
+    M = int(sha256(M).hexdigest(),base=16) % q
   (tv, tskv) = sk
   wplus = [0] * (D-len(tv)-1) + [M]  # 0^{D-|tv|-1}||M
   siga = tkey_delegate(tskv[0],tv,wplus)
@@ -296,12 +307,14 @@ def sign(sk, M, r=None):
 
 def verify(pk, tv, M, sig):
   ## check e(sig[1], g2) = e(h, pk) * e(hw(tv) h_D^M, sig[0])
+  if isinstance(M,bytes):
+    M = int(sha256(M).hexdigest(),base=16) % q
   return GTtestpp( [sig[1],    h,  hw(tmv(tv,M))],
                    [G2neg(g2), pk, sig[0] ] )
 
 def test():
       x= randint(0,q-1)
-      setup()
+      setup(0)
       (pk, sk1) = keygen(x)
 
       print("q", q, "depth", D, "msk", x)
@@ -342,10 +355,8 @@ def test():
       sig1 = sign(sk1,1)
       sig2 = sign(([1,1],[tsk11]),3)
       ## t = [], sig looks like: (r, x+h_D * M * r)
-      print("x, w_001, w_113", x, hw([0,0,1]), hw([1,1,3]))
+      ## print("x, w_001, w_113", x, hw([0,0,1]), hw([1,1,3]))
       print(tkey_delegate(tsk0,[],[0,0,1]))
-      #print("assuming g2=1"
-      # assert (g2 == 1)
       print("sig on M=1,t=[]", sig1) #, sig1[0], (hw([0,0,1]) * sig1[0] + h*x) % q
       print("sig on M=3,t=[1,1]", sig2) #, sig2[0], (hw([1,1,3]) * sig2[0] + h*x) % q
 
@@ -363,10 +374,13 @@ def test():
       assert GTtestpp( [hw((D-1)*[0]+[1]),   sign(sk1,1,0)[1],   h],
                        [tsk0[0],  G2neg(g2),          pk] )
       assert verify(pk,[],1,sign(sk1,1,0))
+      assert not verify(pk,[1],1,sign(sk1,1,0)), "signature for time=[] should not verify for time[1]"
       #return GTtestpp( [sig[1],    h,  hw(tmv(tv,M))],
       #                 [G2neg(g2), pk, sig[0] ] )
       assert verify(pk,[1,1],3,sig2)
       assert not verify(pk,[1,1],3,[sig2[0],G1rand()]), "random signature should not verify"
+      
+      # assert verify(pk,[],"hello",(sign(sk1,"hello")))
 
       print("== testing update")
 
@@ -374,10 +388,24 @@ def test():
         print("sk_", i) #, ": ", sk1
         print("  time ", sk1[0])
         print("  key  ", sk1[1])
-        sig = sign(sk1,3) # time [2,2]
+        sig = sign(sk1,3)
         time = sk1[0]
         print("  signature on M=3 ", sig, verify(pk,time,3,sig))
         keyupdate(sk1)
+
+
+def testdet():
+
+  x = 3
+  setup(0)
+  (pk, sk1) = keygen(x)
+
+  print("q", q, "depth", D, "msk", x)
+  print("g2, h, h1,...,hD, ", g2, h, hv)
+
+  sig1 = sign(sk1,1,2)
+  print("sig on M=1,t=[],r=2", sig1) #, sig1[0], (hw([0,0,1]) * sig1[0] + h*x) % q
+  assert verify(pk,[],1,sig1)
 
 
 if __name__ == "__main__":
