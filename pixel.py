@@ -327,6 +327,8 @@ def keyfupdate(sk, tv_new):
     ## split = 1, prefix = [1,2]
     tskf = skv[split+1] ## tsk_12
     prefix = tv_new[:(split+1)] ## [1,2]
+    # print "update ", tv, tv_new, "erasing skv_", split+1
+    skv[split+1] = []
   assert split+1 == len(prefix)
   
   #print tv, tv_new, split, prefix
@@ -335,6 +337,7 @@ def keyfupdate(sk, tv_new):
   
   for j in range(split+1,len(tv_new)):  ## 1,2
     if tv_new[j] == 2:
+      # print "update ", tv, tv_new, "erasing skv_", j+1
       skv[j+1] = []
     else:
       #print "updating", tv, "to", tv_new, "skv_", j+1, tv_new[:j]+[2], "prefix, split ", prefix, split
@@ -342,6 +345,7 @@ def keyfupdate(sk, tv_new):
       temp = tkey_delegate(tskf,prefix,tv_new[split+1:j] + [2])
       skv[j+1] = tkey_rand(temp,tv_new[:j] + [2])
   for j in range(len(tv_new),D-1):
+    # print "update ", tv, tv_new, "erasing skv_", j+1
     skv[j+1] = []
   sk[0] = tv_new
 
@@ -359,6 +363,7 @@ def sign(sk, M, r=None):
 
 def verify(pk, tv, M, sig):
   ## check e(sig[1], g2) = e(h, pk) * e(hw(tv) h_D^M, sig[0])
+  ## TODO: add subgroup membership check for sig[0], sig[1]
   if isinstance(M,bytes):
     M = int(sha256(M).hexdigest(),base=16) % q
   return GTtestpp( [sig[1],    h,  hw(tmv(tv,M))],
@@ -452,7 +457,7 @@ def testf():
 
       print("== testing fast update")
 
-      for time in [[1,2],[2,1,2],[2,2],[2,2,1],[2,2,2]]:
+      for time in [[1,2],[2],[2,1,2],[2,2],[2,2,1],[2,2,2]]:
         keyfupdate(sk1,time)
         print("  time ", sk1[0])
         print("  key  ", sk1[1])
