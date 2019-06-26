@@ -21,19 +21,19 @@
 ## secret keys sk_t = (t, skv_t) 
 ## * where t is the current time vector
 ## * skv_t is a list of subkeys tsk_* defined below
-## * we maintain the invariant len(skv_t) = len(t) + 1
+## * we maintain the invariant len(skv_t) = D
 ## * and the first entry of skv_t is tsk_t
 
 ## Example for D=4
-##   sk_empty = (tsk_[])
-##   sk_1 = (tsk_1, tsk_2)
-##   sk_11 = (tsk_11, tsk_2, tsk_12)
+##   sk_empty = (tsk_[], [], [], [])
+##   sk_1 = (tsk_1, tsk_2, [], [])
+##   sk_11 = (tsk_11, tsk_2, tsk_12, [])
 ##   sk_111 = (tsk_111, tsk_2, tsk_12, tsk_112)
 ##   sk_112 = (tsk_112, tsk_2, tsk_12, [])
-##   sk_12 = (tsk_12, tsk_2, [])
+##   sk_12 = (tsk_12, tsk_2, [], [])
 ##   sk_121 = (tsk_121, tsk_2, [], tsk_122)
 ##   sk_122 = (tsk_122, tsk_2, [], [])
-##   sk_2 = (tsk_2, [])
+##   sk_2 = (tsk_2, [], [], [])
 ##   sk_21, sk_211, sk_212, sk_22, sk_221, sk_222
 
 ## we define tkey_rand, tkey_del to manipulate the tsk's.
@@ -252,7 +252,8 @@ def keygen(x=None):
   ## tsk_empty = randomize(1, h^x, 1, ..., 1)
   #tsk0 = [0] + [h * x] + D*[0]
   tsk0 =  tkey_rand([G1mul(h,0)] + [G1mul(h,x)] + D*[G1mul(h,0)], []) ## G2 x G1^{D+1}
-  sk = ([], [tsk0])
+  tskv0 = [tsk0] + [[]]*(D-1)
+  sk = [[], tskv0]
   return (pk, sk)
 
 def keyupdate(sk):
@@ -260,25 +261,26 @@ def keyupdate(sk):
   ## requires t+1 <= 2^{D}-1
   ## MUST implement secure erasures!
   ## TODO: implement taking an optimal parameter for fast updates
-  (tv, skv) = sk
+  [tv, skv] = sk
+  assert len(skv) == D
   ## TODO: erase/garbage-collect old tskv[0]
   if (len(tv) < D-1):
     ## NOT leaf node: always append 1 to tv
     ## tv: append 1
     ## skv: delagate tv to tv||1, tv||2, randomize tv||2, remove tv
     ## example:
-    ##   sk_12 = (tsk_12, tsk_2, [])
+    ##   sk_12 = (tsk_12, tsk_2, [], [])
     ##   sk_121 = (tsk_121, tsk_2, [], tsk_122)
       tskv1 = tkey_delegate(skv[0],tv,[1]) ## tv||1
       tskv2 = tkey_rand(tkey_delegate(skv[0],tv,[2]),tv + [2]) ## tv||2
       skv[0] = tskv1
-      skv.append(tskv2)
+      skv[len(tv)+1] = tskv2
       tv.append(1) ## tv = tv+[1] doesn't mutate
   else:
     ## IS leaf node (i.e len(tv) == D-1): convert last1 to a 2 in tv
     ## example, D=4:
     ##   sk_122 = (tsk_122, tsk_2, [], [])
-    ##   sk_2 = (tsk_2, [])
+    ##   sk_2 = (tsk_2, [], [], [])
       last1=0
       for j in range(len(tv)):
         if tv[j] == 1:
@@ -287,11 +289,61 @@ def keyupdate(sk):
       ## tv: change the last 1 to a 2, remove all remaining entries
       ## skv: move 2 to the first position, also remove corresponding entries
       skv[0] = skv[last1+1]
-      skv[last1+1] = []
-      del skv[last1+2:]
+      for i in range(last1+1,D):
+        skv[i] = []
       tv[last1] = 2
       del tv[last1+1:]
-  assert len(skv) == len(tv)+1
+  assert len(skv) == D
+
+def keyfupdate(sk, tv_new):
+  ## updates t to t_new, mutates sk
+  ## requires t < t_new
+  ## idea: every new subkey is either same as before or delegated from tsk_prefix
+  ## example 1, D=4:
+  ##   sk_111 = (tsk_111, tsk_2, tsk_12, tsk_112)
+  ##   sk_121 = (tsk_121, tsk_2, [], tsk_122)
+  ##   each subkey in sk_121 is either same as in sk_111 or delegated from tsk_12
+  ##   set prefix = 12
+  ## example 2, D=4:
+  ##   sk_1 = (tsk_1, tsk_2, [], [])
+  ##   sk_121 = (tsk_121, tsk_2, [], tsk_122)
+  ##   each subkey in sk_121 is either same as in sk_1 or delegated from tsk_1
+  ##   set prefix = 1
+  [tv, skv] = sk
+  ## split is the first index s.t. t[split] = 1 and t_new[split] = 2
+  ## e.g. for the above example, split = 1
+  ## if no such index exists e.g. tv = [1], tv_new = [1,1,2], then prefix = tv and split = 1
+  split=0
+  while split < len(tv) and tv[split] == tv_new[split]:
+    split = split+1
+  if split == len(tv):
+    ## e.g., tv = [1], tv_new = [1,2,1]
+    ## split = 1, prefix = [1]
+    tskf = skv[0] ## tsk_1
+    prefix = tv
+    split = split-1
+  else:
+    ## e.g. tv = [1,1,1], tv_new = [1,2,1]
+    ## split = 1, prefix = [1,2]
+    tskf = skv[split+1] ## tsk_12
+    prefix = tv_new[:(split+1)] ## [1,2]
+  assert split+1 == len(prefix)
+  
+  #print tv, tv_new, split, prefix
+  #print tv, tv_new, "delegating from", prefix, "to", tv_new[(split+1):]
+  skv[0] = tkey_delegate(tskf,prefix,tv_new[(split+1):]) ## tsk_121 derived by delegating tsk_12, without randomization
+  
+  for j in range(split+1,len(tv_new)):  ## 1,2
+    if tv_new[j] == 2:
+      skv[j+1] = []
+    else:
+      #print "updating", tv, "to", tv_new, "skv_", j+1, tv_new[:j]+[2], "prefix, split ", prefix, split
+      #print "input to delegate", prefix, tv_new[split+1:j] + [2]
+      temp = tkey_delegate(tskf,prefix,tv_new[split+1:j] + [2])
+      skv[j+1] = tkey_rand(temp,tv_new[:j] + [2])
+  for j in range(len(tv_new),D-1):
+    skv[j+1] = []
+  sk[0] = tv_new
 
 def sign(sk, M, r=None):
   ## signs message M in Z_q under the time period associated with sk
@@ -320,7 +372,7 @@ def test():
       print("q", q, "depth", D, "msk", x)
       print("g2, h, h1,...,hD, ", g2, h, hv)
       print("pk,sk1", pk, sk1)
-      (vt, tskv) = sk1
+      [vt, tskv] = sk1
       tsk0 = tskv[0]
 
 
@@ -393,6 +445,20 @@ def test():
         print("  signature on M=3 ", sig, verify(pk,time,3,sig))
         keyupdate(sk1)
 
+def testf():
+      x= randint(0,q-1)
+      setup(0)
+      (pk, sk1) = keygen(x)
+
+      print("== testing fast update")
+
+      for time in [[1,2],[2,1,2],[2,2],[2,2,1],[2,2,2]]:
+        keyfupdate(sk1,time)
+        print("  time ", sk1[0])
+        print("  key  ", sk1[1])
+        sig = sign(sk1,3)
+        print("  signature on M=3 ", sig, verify(pk,time,3,sig))
+      
 
 def testdet():
 
@@ -412,6 +478,6 @@ if __name__ == "__main__":
   def main():
     #if sys.version_info[0] < 3:
     #  sys.exit("This script requires Python3 or PyPy3 for the underlying BLS12-381 operations.")
-    test()
+    testf()
 
   main()
